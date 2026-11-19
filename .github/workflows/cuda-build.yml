@@ -1,0 +1,133 @@
+name: cuda-build
+
+# Compile-only check of the CUDA backend (no GPU on the hosted runners, so nothing is run).
+# It mirrors the installer's portable build: Ninja, TINYSTRATA_LFM2/GEMMA4, STRATA_PORTABLE and the
+# default targets. Architectures default to 86 to keep a quick signal; use the `archs` input for the
+# installer's full default ("86;89;120").
+on:
+  workflow_dispatch:
+    inputs:
+      archs:
+        description: "CUDA architectures (any of 86, 89, 120, separated by ;)"
+        default: "86"
+        required: true
+  push:
+    branches: ["ci/**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cuda-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CUDA_ARCHS: ${{ inputs.archs || '86' }}
+
+jobs:
+  linux:
+    name: CUDA ${{ matrix.cuda }} (Linux, sm ${{ inputs.archs || '86' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda: ["13.4.3"]
+    container: nvidia/cuda:${{ matrix.cuda }}-devel-ubuntu24.04
+    env:
+      CCACHE_DIR: /github/home/.ccache
+      CCACHE_MAXSIZE: 2G
+    steps:
+      - name: Install the build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git cmake ninja-build g++ ccache ca-certificates
+          nvcc --version | tail -2
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /github/home/.ccache
+          key: ccache-linux-cuda${{ matrix.cuda }}-${{ env.CUDA_ARCHS }}-${{ github.sha }}
+          restore-keys: ccache-linux-cuda${{ matrix.cuda }}-${{ env.CUDA_ARCHS }}-
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DTINYSTRATA_BACKEND=CUDA -DTINYSTRATA_LFM2=ON -DTINYSTRATA_GEMMA4=ON -DSTRATA_PORTABLE=ON
+          -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCHS" -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      - name: Check the expected outputs exist
+        run: |
+          ls -la build/tinystrata build/tinystrata-lfm2 build/tinystrata-gemma4 build/tinystrata-vision
+          ccache -s | head -8
+
+  windows:
+    name: CUDA 13.2.2 (Windows, sm ${{ inputs.archs || '86' }})
+    runs-on: windows-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CUDA_VERSION: "13.2.2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Restore the CUDA toolkit cache
+        id: cuda-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}\cuda
+          key: cuda-redist-windows-${{ env.CUDA_VERSION }}-v1
+
+      - name: Download the CUDA toolkit from NVIDIA (checksums from NVIDIA's manifest)
+        # Same components and verification as install.ps1: no driver or system CUDA is installed.
+        if: steps.cuda-cache.outputs.cache-hit != 'true'
+        run: |
+          $base = 'https://developer.download.nvidia.com/compute/cuda/redist/'
+          $manifest = Invoke-RestMethod "${base}redistrib_$env:CUDA_VERSION.json"
+          if ($manifest.release_label -ne $env:CUDA_VERSION) { throw 'Unexpected CUDA manifest release.' }
+          $dest = Join-Path $env:RUNNER_TEMP 'cuda'
+          New-Item -ItemType Directory -Force $dest | Out-Null
+          foreach ($name in 'cuda_nvcc', 'cuda_cudart', 'cuda_cccl', 'cuda_crt', 'libnvvm', 'libcublas') {
+            $pkg = $manifest.$name.'windows-x86_64'
+            $zip = Join-Path $env:RUNNER_TEMP "$name.zip"
+            Invoke-WebRequest -Uri ($base + $pkg.relative_path) -OutFile $zip
+            if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $pkg.sha256) { throw "Checksum mismatch: $name" }
+            $extract = Join-Path $env:RUNNER_TEMP "x_$name"
+            Expand-Archive $zip -DestinationPath $extract -Force
+            $top = Get-ChildItem $extract -Directory | Select-Object -First 1
+            Copy-Item "$($top.FullName)\*" $dest -Recurse -Force
+            Remove-Item $zip, $extract -Recurse -Force
+          }
+
+      - name: Show the compiler
+        run: |
+          $cuda = Join-Path $env:RUNNER_TEMP 'cuda'
+          & "$cuda\bin\nvcc.exe" --version
+          "CUDA_PATH=$cuda" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "$cuda\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DTINYSTRATA_BACKEND=CUDA -DTINYSTRATA_LFM2=ON -DTINYSTRATA_GEMMA4=ON -DSTRATA_PORTABLE=ON
+          "-DCMAKE_CUDA_ARCHITECTURES=$env:CUDA_ARCHS"
+          "-DCMAKE_CUDA_COMPILER=$env:CUDA_PATH\bin\nvcc.exe" "-DCUDAToolkit_ROOT=$env:CUDA_PATH"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Check the expected outputs exist
+        run: Get-Item build\tinystrata.exe, build\tinystrata-lfm2.exe, build\tinystrata-gemma4.exe, build\tinystrata-vision.exe, build\strata_kq.dll | Format-Table Name, Length

@@ -8,6 +8,7 @@
 !/.github/workflows/
 /.github/workflows/**
 !/.github/workflows/tests.yml
+!/.github/workflows/cuda-build.yml
 !/docs/
 /docs/**
 !/docs/development-memory.md
