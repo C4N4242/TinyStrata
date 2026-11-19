@@ -80,8 +80,12 @@ jobs:
         # test_native_command_inbox.py needs a compiled executable (covered by the native job).
         # Skipped on Linux only: two tests that assume Windows behaviour and fail there
         # (test_hip_runtime_integration.py, test_vision_startup_resilience.py).
+        # The Windows runner's default TEMP is an 8.3 short path (C:\Users\RUNNER~1\...), but the
+        # tests compare it with resolved long paths. Point TEMP/TMP at the long RUNNER_TEMP path.
         env:
           PYTHONDONTWRITEBYTECODE: "1"
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
           export PYTHONPATH="$PWD"
           skip=" q36-prefill-cancel.py test_native_command_inbox.py "
