@@ -2,15 +2,17 @@ name: cuda-build
 
 # Compile-only check of the CUDA backend (no GPU on the hosted runners, so nothing is run).
 # It mirrors the installer's portable build: Ninja, TINYSTRATA_LFM2/GEMMA4, STRATA_PORTABLE and the
-# default targets. Architectures default to 86 to keep a quick signal; use the `archs` input for the
-# installer's full default ("86;89;120").
+# default targets. Each supported architecture (86 Ampere, 89 Ada, 120 Blackwell) is built in its own
+# parallel job, so every architecture-specific code path is compiled and the wall time stays at one
+# architecture's build. A manual run can add the installer's combined default ("86;89;120") as a
+# fourth entry with the `fat` input.
 on:
   workflow_dispatch:
     inputs:
-      archs:
-        description: "CUDA architectures (any of 86, 89, 120, separated by ;)"
-        default: "86"
-        required: true
+      fat:
+        description: "Also build the combined 86;89;120 image (much longer)"
+        type: boolean
+        default: false
   push:
     branches: ["ci/**"]
 
@@ -21,20 +23,19 @@ concurrency:
   group: cuda-build-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CUDA_ARCHS: ${{ inputs.archs || '86' }}
-
 jobs:
   linux:
-    name: CUDA ${{ matrix.cuda }} (Linux, sm ${{ inputs.archs || '86' }})
+    name: Linux CUDA ${{ matrix.cuda }} sm ${{ matrix.archs }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
         cuda: ["13.4.3"]
+        archs: ${{ fromJSON(inputs.fat && '["86","89","120","86;89;120"]' || '["86","89","120"]') }}
     container: nvidia/cuda:${{ matrix.cuda }}-devel-ubuntu24.04
     env:
+      CUDA_ARCHS: ${{ matrix.archs }}
       CCACHE_DIR: /github/home/.ccache
       CCACHE_MAXSIZE: 2G
     steps:
@@ -49,8 +50,8 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /github/home/.ccache
-          key: ccache-linux-cuda${{ matrix.cuda }}-${{ env.CUDA_ARCHS }}-${{ github.sha }}
-          restore-keys: ccache-linux-cuda${{ matrix.cuda }}-${{ env.CUDA_ARCHS }}-
+          key: ccache-linux-cuda${{ matrix.cuda }}-${{ matrix.archs }}-${{ github.sha }}
+          restore-keys: ccache-linux-cuda${{ matrix.cuda }}-${{ matrix.archs }}-
 
       - name: Configure
         run: >
@@ -66,17 +67,23 @@ jobs:
       - name: Check the expected outputs exist
         run: |
           ls -la build/tinystrata build/tinystrata-lfm2 build/tinystrata-gemma4 build/tinystrata-vision
+          cuobjdump --list-elf build/tinystrata | grep -o "sm_[0-9]*" | sort | uniq -c
           ccache -s | head -8
 
   windows:
-    name: CUDA 13.2.2 (Windows, sm ${{ inputs.archs || '86' }})
+    name: Windows CUDA 13.2.2 sm ${{ matrix.archs }}
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        archs: ${{ fromJSON(inputs.fat && '["86","89","120","86;89;120"]' || '["86","89","120"]') }}
     defaults:
       run:
         shell: pwsh
     env:
       CUDA_VERSION: "13.2.2"
+      CUDA_ARCHS: ${{ matrix.archs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
