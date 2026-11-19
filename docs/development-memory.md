@@ -1,6 +1,12 @@
 # 開発メモ
 
-更新日: 2026-11-12
+更新日: 2026-11-19
+
+## Linux（CUDA）ビルド
+
+- ソース無変更でLinuxのCUDA 13.4.3ビルドが通り、RTX 2060 Max-Q（Turing、6GiB）でQwen3.6の入力処理・生成が完走した。手順と未確認範囲は [Linux（CUDA）でのビルドと動作確認](linux-cuda-build.md)
+- 既定の `CMAKE_CUDA_ARCHITECTURES` はTuringを含まないため、`-DCMAKE_CUDA_ARCHITECTURES=75` の明示が必要
+- 未解決: Qwen以外のモデル、`--serve`・`run.py`・Vision、標準ベンチ（v1）はLinuxで未確認。公式の対応範囲（Ampere以降・Windows）は変えていない
 
 ## UIインストーラーの入口とモデル取得
 
