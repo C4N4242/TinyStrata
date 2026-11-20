@@ -3,6 +3,7 @@ name: install-script
 # Checks install.sh without a GPU: shellcheck, and on four distributions a run of the package
 # command it suggests followed by a dry run. The CUDA build itself is not run here.
 on:
+  push:
   pull_request:
     paths:
       - install.sh
